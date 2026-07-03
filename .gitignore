@@ -1,0 +1,48 @@
+# Environment files
+.env
+.env.*
+code/.env
+code/.env.*
+
+# Keep example env file
+!.env.example
+!code/.env.example
+
+# Postman local/global config
+.postman/
+postman/globals/
+
+# Go build files
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Upload files
+code/uploads/documents/*
+code/uploads/signatures/*
+
+# Keep upload folders
+!code/uploads/documents/.gitkeep
+!code/uploads/signatures/.gitkeep
+
+# Editor / IDE
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
