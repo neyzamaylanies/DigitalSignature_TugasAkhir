@@ -42,7 +42,16 @@ func ConnectDatabase() {
 
 	DB = database
 
-	err = DB.AutoMigrate(&models.User{})
+	err = DB.AutoMigrate(
+		&models.User{},
+		&models.Document{},
+		&models.SignatureRequest{},
+		&models.Certificate{},
+		&models.SignatureImage{},
+		&models.CertificateTransaction{},
+		&models.ActivityLog{},
+	)
+
 	if err != nil {
 		log.Fatal("Failed to migrate database: ", err)
 	}

@@ -22,7 +22,15 @@ func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		tokenString := strings.Replace(authHeader, "Bearer ", "", 1)
+		if !strings.HasPrefix(authHeader, "Bearer ") {
+			w.WriteHeader(http.StatusUnauthorized)
+			json.NewEncoder(w).Encode(map[string]string{
+				"message": "Invalid authorization format",
+			})
+			return
+		}
+
+		tokenString := strings.TrimPrefix(authHeader, "Bearer ")
 
 		token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
 			return []byte(os.Getenv("JWT_SECRET")), nil
@@ -54,9 +62,13 @@ func AuthMiddleware(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		userID := uint(userIDFloat)
+		email, _ := claims["email"].(string)
+		role, _ := claims["role"].(string)
 
-		ctx := context.WithValue(r.Context(), "user_id", userID)
+		ctx := context.WithValue(r.Context(), "user_id", uint(userIDFloat))
+		ctx = context.WithValue(ctx, "email", email)
+		ctx = context.WithValue(ctx, "role", role)
+
 		next.ServeHTTP(w, r.WithContext(ctx))
 	}
 }
