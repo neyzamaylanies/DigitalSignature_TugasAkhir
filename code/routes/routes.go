@@ -22,4 +22,9 @@ func SetupRoutes() {
 
 	// Dashboard routes
 	http.HandleFunc("/api/dashboard", middleware.AuthMiddleware(handlers.GetDashboard))
+
+	// Document routes
+	http.HandleFunc("/api/dokumen/upload", middleware.AuthMiddleware(handlers.UploadDocument))
+	http.HandleFunc("/api/dokumen", middleware.AuthMiddleware(handlers.GetMyDocuments))
+	http.HandleFunc("/api/dokumen/", middleware.AuthMiddleware(handlers.DocumentRouter))
 }
