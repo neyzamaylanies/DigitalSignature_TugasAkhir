@@ -31,4 +31,8 @@ func SetupRoutes() {
 	// Signature image routes
 	http.HandleFunc("/api/tanda-tangan", middleware.AuthMiddleware(handlers.SignatureImageRootRouter))
 	http.HandleFunc("/api/tanda-tangan/", middleware.AuthMiddleware(handlers.SignatureImageDetailRouter))
+
+	// Certificate routes
+	http.HandleFunc("/api/sertifikat", middleware.AuthMiddleware(handlers.CertificateRootRouter))
+	http.HandleFunc("/api/sertifikat/", middleware.AuthMiddleware(handlers.CertificateDetailRouter))
 }
