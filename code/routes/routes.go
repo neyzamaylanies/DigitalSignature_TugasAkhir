@@ -35,4 +35,9 @@ func SetupRoutes() {
 	// Certificate routes
 	http.HandleFunc("/api/sertifikat", middleware.AuthMiddleware(handlers.CertificateRootRouter))
 	http.HandleFunc("/api/sertifikat/", middleware.AuthMiddleware(handlers.CertificateDetailRouter))
+
+	// Signature request routes
+	http.HandleFunc("/api/permintaan-ttd", middleware.AuthMiddleware(handlers.SignatureRequestRootRouter))
+	http.HandleFunc("/api/permintaan-ttd/saya", middleware.AuthMiddleware(handlers.SignatureRequestMeRouter))
+	http.HandleFunc("/api/permintaan-ttd/", middleware.AuthMiddleware(handlers.SignatureRequestDetailRouter))
 }
