@@ -172,6 +172,7 @@ func CreateSignatureRequest(w http.ResponseWriter, r *http.Request) {
 		}
 
 		var signerUser models.User
+
 		if err := db.DB.First(&signerUser, signer.UserID).Error; err != nil {
 			writeJSON(w, http.StatusNotFound, map[string]string{
 				"message": "Signer user not found",
@@ -231,7 +232,12 @@ func CreateSignatureRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tx.Commit()
+	if err := tx.Commit().Error; err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{
+			"message": "Failed to commit transaction",
+		})
+		return
+	}
 
 	writeJSON(w, http.StatusCreated, map[string]interface{}{
 		"message": "Signature request created successfully",
