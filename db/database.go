@@ -77,6 +77,7 @@ type foreignKeyConstraint struct {
 
 func applyIntegrityConstraints() {
 	ensureDokumenTipeNotNull()
+	ensureUsersRoleDefault()
 
 	foreignKeys := []foreignKeyConstraint{
 		{"fk_dokumen_user", "dokumen", "user_id", "users", "id"},
@@ -138,4 +139,23 @@ func ensureDokumenTipeNotNull() {
 	}
 
 	log.Println("dokumen.tipe set to NOT NULL")
+}
+
+func ensureUsersRoleDefault() {
+	var columnDefault *string
+	err := DB.Raw(
+		`SELECT column_default FROM information_schema.columns
+			WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'role'`,
+	).Scan(&columnDefault).Error
+
+	if err != nil || (columnDefault != nil && *columnDefault != "") {
+		return
+	}
+
+	if err := DB.Exec(`ALTER TABLE users ALTER COLUMN role SET DEFAULT 'user'`).Error; err != nil {
+		log.Printf("failed to set users.role default: %v", err)
+		return
+	}
+
+	log.Println("users.role default set to 'user'")
 }
