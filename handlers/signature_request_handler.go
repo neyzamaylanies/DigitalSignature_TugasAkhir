@@ -198,10 +198,10 @@ func ApproveSignatureRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	transaction := models.CertificateTransaction{
-		PermintaanTTDID: signatureRequest.ID,
+		PermintaanTTDID: &signatureRequest.ID,
 		DokumenID:       document.ID,
 		UserID:          userID,
-		SertifikatID:    certificate.ID,
+		SertifikatID:    &certificate.ID,
 		Aksi:            "approve",
 		FileResultPath:  outputPath,
 	}
@@ -214,7 +214,7 @@ func ApproveSignatureRequest(w http.ResponseWriter, r *http.Request) {
 
 	activityLog := models.ActivityLog{
 		UserID:     userID,
-		DokumenID:  document.ID,
+		DokumenID:  &document.ID,
 		Aksi:       "sign",
 		Keterangan: "User approved and signed the document",
 	}
@@ -373,7 +373,7 @@ func RejectSignatureRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	transaction := models.CertificateTransaction{
-		PermintaanTTDID: signatureRequest.ID,
+		PermintaanTTDID: &signatureRequest.ID,
 		DokumenID:       document.ID,
 		UserID:          userID,
 		Aksi:            "reject",
@@ -388,7 +388,7 @@ func RejectSignatureRequest(w http.ResponseWriter, r *http.Request) {
 
 	activityLog := models.ActivityLog{
 		UserID:     userID,
-		DokumenID:  document.ID,
+		DokumenID:  &document.ID,
 		Aksi:       "reject",
 		Keterangan: "User rejected the signature request: " + requestBody.AlasanTolak,
 	}

@@ -45,7 +45,7 @@ func getRoleFromContext(r *http.Request) string {
 func createActivityLog(userID uint, dokumenID uint, aksi string, keterangan string) {
 	log := models.ActivityLog{
 		UserID:     userID,
-		DokumenID:  dokumenID,
+		DokumenID:  &dokumenID,
 		Aksi:       aksi,
 		Keterangan: keterangan,
 	}
@@ -405,7 +405,7 @@ func SubmitDocumentForSigning(w http.ResponseWriter, r *http.Request) {
 
 	activityLog := models.ActivityLog{
 		UserID:     userID,
-		DokumenID:  document.ID,
+		DokumenID:  &document.ID,
 		Aksi:       "upload",
 		Keterangan: "User submitted a document for signature request",
 	}

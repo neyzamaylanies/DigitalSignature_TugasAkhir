@@ -142,7 +142,7 @@ func SelfSignDocument(w http.ResponseWriter, r *http.Request) {
 
 	activityLog := models.ActivityLog{
 		UserID:     userID,
-		DokumenID:  document.ID,
+		DokumenID:  &document.ID,
 		Aksi:       "sign",
 		Keterangan: "User initiated self-signing process",
 	}
