@@ -89,7 +89,7 @@ func CreateCertificate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	createActivityLog(userID, 0, "buat_sertifikat", "User created a digital certificate simulation")
+	createActivityLog(userID, 0, "create_certificate", "User created a digital certificate simulation")
 
 	writeJSON(w, http.StatusCreated, map[string]interface{}{
 		"message": "Certificate created successfully",
@@ -105,6 +105,10 @@ func GetMyCertificates(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+
+	db.DB.Model(&models.Certificate{}).
+		Where("user_id = ? AND status = ? AND valid_until < ?", userID, "active", time.Now()).
+		Update("status", "expired")
 
 	var certificates []models.Certificate
 
@@ -183,7 +187,7 @@ func RevokeCertificate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	createActivityLog(userID, 0, "revoke_sertifikat", "User revoked a digital certificate simulation")
+	createActivityLog(userID, 0, "revoke_certificate", "User revoked a digital certificate simulation")
 
 	writeJSON(w, http.StatusOK, map[string]interface{}{
 		"message": "Certificate revoked successfully",

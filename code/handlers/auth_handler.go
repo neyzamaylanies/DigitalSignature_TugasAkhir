@@ -60,6 +60,14 @@ func Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if !user.IsActive {
+		w.WriteHeader(http.StatusForbidden)
+		json.NewEncoder(w).Encode(map[string]string{
+			"message": "This account has been deactivated. Please contact an admin.",
+		})
+		return
+	}
+
 	token, err := utils.GenerateToken(user.ID, user.Email, user.Role)
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)

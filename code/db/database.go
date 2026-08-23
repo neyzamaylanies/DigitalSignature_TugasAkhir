@@ -62,5 +62,80 @@ func ConnectDatabase() {
 		log.Fatal("Failed to migrate database: ", err)
 	}
 
+	applyIntegrityConstraints()
+
 	fmt.Println("Database connected successfully")
+}
+
+type foreignKeyConstraint struct {
+	Name      string
+	Table     string
+	Column    string
+	RefTable  string
+	RefColumn string
+}
+
+func applyIntegrityConstraints() {
+	ensureDokumenTipeNotNull()
+
+	foreignKeys := []foreignKeyConstraint{
+		{"fk_dokumen_user", "dokumen", "user_id", "users", "id"},
+		{"fk_permintaan_ttd_dokumen", "permintaan_ttd", "dokumen_id", "dokumen", "id"},
+		{"fk_permintaan_ttd_user", "permintaan_ttd", "user_id", "users", "id"},
+		{"fk_sertifikat_user", "sertifikat", "user_id", "users", "id"},
+		{"fk_tanda_tangan_user", "tanda_tangan", "user_id", "users", "id"},
+		{"fk_transaksi_sertifikat_permintaan_ttd", "transaksi_sertifikat", "permintaan_ttd_id", "permintaan_ttd", "id"},
+		{"fk_transaksi_sertifikat_dokumen", "transaksi_sertifikat", "dokumen_id", "dokumen", "id"},
+		{"fk_transaksi_sertifikat_user", "transaksi_sertifikat", "user_id", "users", "id"},
+		{"fk_transaksi_sertifikat_sertifikat", "transaksi_sertifikat", "sertifikat_id", "sertifikat", "id"},
+		{"fk_log_aktivitas_dokumen", "log_aktivitas", "dokumen_id", "dokumen", "id"},
+		{"fk_log_aktivitas_user", "log_aktivitas", "user_id", "users", "id"},
+	}
+
+	for _, fk := range foreignKeys {
+		if constraintExists(fk.Name) {
+			continue
+		}
+
+		stmt := fmt.Sprintf(
+			"ALTER TABLE %s ADD CONSTRAINT %s FOREIGN KEY (%s) REFERENCES %s(%s)",
+			fk.Table, fk.Name, fk.Column, fk.RefTable, fk.RefColumn,
+		)
+
+		if err := DB.Exec(stmt).Error; err != nil {
+			log.Printf("failed to add constraint %s: %v", fk.Name, err)
+			continue
+		}
+
+		log.Printf("constraint %s created (dokumen/permintaan_ttd integrity)", fk.Name)
+	}
+}
+
+func constraintExists(name string) bool {
+	var count int64
+	DB.Raw(
+		`SELECT COUNT(*) FROM pg_constraint WHERE conname = ?`,
+		name,
+	).Scan(&count)
+
+	return count > 0
+}
+
+func ensureDokumenTipeNotNull() {
+	var isNullable string
+	err := DB.Raw(
+		`SELECT is_nullable FROM information_schema.columns
+			WHERE table_schema = 'public' AND table_name = 'dokumen' AND column_name = 'tipe'`,
+	).Scan(&isNullable).Error
+
+	if err != nil || isNullable != "YES" {
+		return
+	}
+
+	if err := DB.Exec(`ALTER TABLE dokumen ALTER COLUMN tipe SET NOT NULL`).Error; err != nil {
+		log.Printf("failed to set dokumen.tipe NOT NULL: %v", err)
+		return
+	}
+
+	log.Println("dokumen.tipe set to NOT NULL")
 }

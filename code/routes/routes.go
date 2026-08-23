@@ -17,14 +17,17 @@ func SetupRoutes() {
 	http.HandleFunc("/api/auth/logout", middleware.AuthMiddleware(handlers.Logout))
 	http.HandleFunc("/api/auth/profile", middleware.AuthMiddleware(handlers.Profile))
 
-	// User routes
-	http.HandleFunc("/api/users", middleware.AdminMiddleware(handlers.GetUsers))
+	// User routes (GET = list, POST = admin create user baru)
+	// /api/users/{id} = detail, edit, nonaktifkan, reset-password (admin only)
+	http.HandleFunc("/api/users", middleware.AdminMiddleware(handlers.UserRootRouter))
+	http.HandleFunc("/api/users/", middleware.AdminMiddleware(handlers.UserDetailRouter))
 
 	// Dashboard routes
 	http.HandleFunc("/api/dashboard", middleware.AuthMiddleware(handlers.GetDashboard))
 
 	// Document routes
 	http.HandleFunc("/api/dokumen/upload", middleware.AuthMiddleware(handlers.UploadDocument))
+	http.HandleFunc("/api/dokumen/ajukan", middleware.AuthMiddleware(handlers.SubmitDocumentForSigning))
 	http.HandleFunc("/api/dokumen", middleware.AuthMiddleware(handlers.GetMyDocuments))
 	http.HandleFunc("/api/dokumen/", middleware.AuthMiddleware(handlers.DocumentRouter))
 
@@ -38,6 +41,9 @@ func SetupRoutes() {
 
 	// Signature request routes
 	http.HandleFunc("/api/permintaan-ttd", middleware.AuthMiddleware(handlers.SignatureRequestRootRouter))
-	http.HandleFunc("/api/permintaan-ttd/saya", middleware.AuthMiddleware(handlers.SignatureRequestMeRouter))
 	http.HandleFunc("/api/permintaan-ttd/", middleware.AuthMiddleware(handlers.SignatureRequestDetailRouter))
+
+	// Activity log routes
+	http.HandleFunc("/api/log-aktivitas", middleware.AuthMiddleware(handlers.GetMyActivityLogs))
+	http.HandleFunc("/api/log-aktivitas/semua", middleware.AdminMiddleware(handlers.GetAllActivityLogs))
 }

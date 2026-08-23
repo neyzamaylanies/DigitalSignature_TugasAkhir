@@ -28,7 +28,7 @@ func GetDashboard(w http.ResponseWriter, r *http.Request) {
 		Count(&totalDokumenSaya)
 
 	db.DB.Model(&models.SignatureRequest{}).
-		Where("user_id = ? AND status IN ?", userID, []string{"menunggu", "siap_ttd"}).
+		Where("user_id = ? AND status = ?", userID, "menunggu").
 		Count(&totalPermintaanMenunggu)
 
 	db.DB.Model(&models.SignatureRequest{}).
@@ -39,9 +39,9 @@ func GetDashboard(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"message": "Dashboard summary retrieved successfully",
 		"data": map[string]int64{
-			"total_dokumen_saya":           totalDokumenSaya,
-			"total_permintaan_menunggu":    totalPermintaanMenunggu,
-			"total_dokumen_ditandatangani": totalDokumenDitandatangani,
+			"dokumen_saya":           totalDokumenSaya,
+			"permintaan_menunggu":    totalPermintaanMenunggu,
+			"dokumen_ditandatangani": totalDokumenDitandatangani,
 		},
 	})
 }

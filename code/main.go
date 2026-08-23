@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"digital-signature-api/db"
+	"digital-signature-api/middleware"
 	"digital-signature-api/routes"
 	"digital-signature-api/utils"
 )
@@ -26,5 +27,5 @@ func main() {
 	}
 
 	fmt.Println("Server running on port " + port)
-	log.Fatal(http.ListenAndServe(":"+port, nil))
+	log.Fatal(http.ListenAndServe(":"+port, middleware.CORS(http.DefaultServeMux)))
 }
