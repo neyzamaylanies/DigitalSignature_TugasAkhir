@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"digital-signature-api/db"
 	"digital-signature-api/models"
@@ -36,6 +37,14 @@ func Login(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 		json.NewEncoder(w).Encode(map[string]string{
 			"message": "Invalid request body",
+		})
+		return
+	}
+
+	if strings.TrimSpace(request.Email) == "" || strings.TrimSpace(request.Password) == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{
+			"message": "Email and password are required",
 		})
 		return
 	}
