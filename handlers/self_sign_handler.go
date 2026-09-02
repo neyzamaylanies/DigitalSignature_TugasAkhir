@@ -8,6 +8,8 @@ import (
 
 	"digital-signature-api/db"
 	"digital-signature-api/models"
+
+	"gorm.io/gorm/clause"
 )
 
 // SelfSignPositionRequest adalah body POST /api/dokumen/{id}/tanda-tangani,
@@ -83,23 +85,28 @@ func SelfSignDocument(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var document models.Document
-	if err := db.DB.First(&document, documentID).Error; err != nil {
+	// Validasi kepemilikan/jenis dokumen bisa dibaca tanpa lock (read-only, tidak
+	// mengubah data). Pengecekan status "draft" akan diulang lagi di bawah SETELAH
+	// baris dokumen dikunci (FOR UPDATE) di dalam transaksi, untuk mencegah dua
+	// permintaan self-sign yang datang hampir bersamaan pada dokumen yang sama
+	// keduanya lolos validasi status dan sama-sama membuat permintaan_ttd (double-submit).
+	var documentPreCheck models.Document
+	if err := db.DB.First(&documentPreCheck, documentID).Error; err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"message": "Document not found"})
 		return
 	}
 
-	if document.UserID != userID {
+	if documentPreCheck.UserID != userID {
 		writeJSON(w, http.StatusForbidden, map[string]string{"message": "You do not have access to this document"})
 		return
 	}
 
-	if document.Jenis != "self" {
+	if documentPreCheck.Jenis != "self" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "This document is not set up for self-signing"})
 		return
 	}
 
-	if document.Status != "draft" {
+	if documentPreCheck.Status != "draft" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "Only draft document can start the self-signing process"})
 		return
 	}
@@ -112,6 +119,35 @@ func SelfSignDocument(w http.ResponseWriter, r *http.Request) {
 	tx := db.DB.Begin()
 	if tx.Error != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "Failed to start transaction"})
+		return
+	}
+
+	// Kunci baris dokumen (row-level lock, FOR UPDATE) lalu ulangi pengecekan status
+	// draft dari data yang sudah dikunci. Jika ada request lain yang sempat lolos
+	// lebih dulu dan sudah mengubah status dokumen, request ini akan gagal di sini
+	// alih-alih ikut membuat permintaan_ttd duplikat untuk dokumen yang sama.
+	var document models.Document
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&document, documentID).Error; err != nil {
+		tx.Rollback()
+		writeJSON(w, http.StatusNotFound, map[string]string{"message": "Document not found"})
+		return
+	}
+
+	if document.UserID != userID {
+		tx.Rollback()
+		writeJSON(w, http.StatusForbidden, map[string]string{"message": "You do not have access to this document"})
+		return
+	}
+
+	if document.Jenis != "self" {
+		tx.Rollback()
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "This document is not set up for self-signing"})
+		return
+	}
+
+	if document.Status != "draft" {
+		tx.Rollback()
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "Only draft document can start the self-signing process"})
 		return
 	}
 

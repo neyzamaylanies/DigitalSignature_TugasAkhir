@@ -78,6 +78,7 @@ type foreignKeyConstraint struct {
 func applyIntegrityConstraints() {
 	ensureDokumenTipeNotNull()
 	ensureUsersRoleDefault()
+	ensureSignatureRequestUniqueIndexes()
 
 	foreignKeys := []foreignKeyConstraint{
 		{"fk_dokumen_user", "dokumen", "user_id", "users", "id"},
@@ -139,6 +140,28 @@ func ensureDokumenTipeNotNull() {
 	}
 
 	log.Println("dokumen.tipe set to NOT NULL")
+}
+
+// ensureSignatureRequestUniqueIndexes memastikan constraint UNIQUE pada kombinasi
+// (dokumen_id, urutan) dan (dokumen_id, user_id) benar-benar ada di tabel
+// permintaan_ttd. GORM AutoMigrate seharusnya sudah membuat kedua index ini dari
+// tag `uniqueIndex:idx_dokumen_urutan` / `uniqueIndex:idx_dokumen_user` pada
+// models.SignatureRequest, tapi statement ini dijalankan secara eksplisit sebagai
+// jaring pengaman (idempotent, aman dijalankan berulang) supaya constraint ini
+// terjamin ada di database walau AutoMigrate dilewati/gagal sebagian, sesuai
+// yang dijelaskan pada BAB IV mengenai pencegahan duplikasi urutan/penanda tangan.
+func ensureSignatureRequestUniqueIndexes() {
+	if err := DB.Exec(
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_dokumen_urutan ON permintaan_ttd (dokumen_id, urutan)`,
+	).Error; err != nil {
+		log.Printf("failed to ensure idx_dokumen_urutan unique index: %v", err)
+	}
+
+	if err := DB.Exec(
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_dokumen_user ON permintaan_ttd (dokumen_id, user_id)`,
+	).Error; err != nil {
+		log.Printf("failed to ensure idx_dokumen_user unique index: %v", err)
+	}
 }
 
 func ensureUsersRoleDefault() {

@@ -11,6 +11,9 @@ import (
 	"digital-signature-api/db"
 	"digital-signature-api/models"
 	"digital-signature-api/utils"
+
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type ApproveSignatureRequestBody struct {
@@ -48,6 +51,30 @@ type RejectSignatureRequestBody struct {
 	AlasanTolak string `json:"alasan_tolak"`
 }
 
+// lockDocumentSigningGroup mengunci (SELECT ... FOR UPDATE) baris dokumen dan
+// SELURUH baris permintaan_ttd milik dokumen tersebut di dalam transaksi tx.
+// Ini mencegah race condition ketika lebih dari satu permintaan approve/tolak
+// pada dokumen multi-signer yang sama diproses hampir bersamaan: request kedua
+// akan menunggu (blocked) sampai request pertama commit/rollback, sehingga
+// validasi urutan dan penentuan status akhir dokumen selalu dihitung dari data
+// yang konsisten (bukan data basi/stale).
+func lockDocumentSigningGroup(tx *gorm.DB, dokumenID uint) (models.Document, []models.SignatureRequest, error) {
+	var document models.Document
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&document, dokumenID).Error; err != nil {
+		return document, nil, err
+	}
+
+	var siblings []models.SignatureRequest
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+		Where("dokumen_id = ?", dokumenID).
+		Order("urutan ASC").
+		Find(&siblings).Error; err != nil {
+		return document, nil, err
+	}
+
+	return document, siblings, nil
+}
+
 func ApproveSignatureRequest(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]string{"message": "Method not allowed"})
@@ -66,24 +93,44 @@ func ApproveSignatureRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var reqBody ApproveSignatureRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil || reqBody.TandaTanganID == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "Tanda tangan ID is required"})
+		return
+	}
+
+	tx := db.DB.Begin()
+	if tx.Error != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "Failed to start transaction"})
+		return
+	}
+
+	// Kunci baris permintaan_ttd yang akan diproses (row-level lock, FOR UPDATE).
 	var signatureRequest models.SignatureRequest
-	if err := db.DB.First(&signatureRequest, signatureRequestID).Error; err != nil {
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&signatureRequest, signatureRequestID).Error; err != nil {
+		tx.Rollback()
 		writeJSON(w, http.StatusNotFound, map[string]string{"message": "Signature request not found"})
 		return
 	}
 
 	if signatureRequest.UserID != userID {
+		tx.Rollback()
 		writeJSON(w, http.StatusForbidden, map[string]string{"message": "You are not the assigned signer for this request"})
 		return
 	}
 
 	if signatureRequest.Status != "menunggu" {
+		tx.Rollback()
 		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "This signature request has already been processed"})
 		return
 	}
 
-	var document models.Document
-	if err := db.DB.First(&document, signatureRequest.DokumenID).Error; err != nil {
+	// Kunci dokumen beserta SELURUH sibling permintaan_ttd pada dokumen yang sama.
+	// Selama transaksi ini berjalan, request approve/tolak lain pada dokumen yang
+	// sama akan menunggu lock ini terlepas (commit/rollback) sebelum bisa lanjut.
+	document, siblings, err := lockDocumentSigningGroup(tx, signatureRequest.DokumenID)
+	if err != nil {
+		tx.Rollback()
 		writeJSON(w, http.StatusNotFound, map[string]string{"message": "Related document not found"})
 		return
 	}
@@ -91,49 +138,51 @@ func ApproveSignatureRequest(w http.ResponseWriter, r *http.Request) {
 	// Dokumen self-sign berstatus "proses_ttd", dokumen cross-sign berstatus "menunggu_ttd".
 	// Keduanya valid dieksekusi lewat endpoint approve yang sama, sesuai alur magang.
 	if document.Status != "menunggu_ttd" && document.Status != "proses_ttd" {
+		tx.Rollback()
 		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "This document is no longer awaiting signature actions"})
 		return
 	}
 
 	// urutan validation: signer sebelumnya harus sudah diproses (selesai ATAU ditolak) dulu.
-	// Signer dengan status "ditolak" dianggap sudah diproses dan tidak menghalangi giliran berikutnya.
-	var pendingBefore int64
-	if err := db.DB.Model(&models.SignatureRequest{}).
-		Where("dokumen_id = ? AND urutan < ? AND status = ?", signatureRequest.DokumenID, signatureRequest.Urutan, "menunggu").
-		Count(&pendingBefore).Error; err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "Failed to validate signing order"})
-		return
+	// Signer dengan status "ditolak" dianggap sudah diproses dan tidak menghalangi giliran
+	// berikutnya. Dihitung dari snapshot `siblings` yang sudah dikunci (FOR UPDATE), bukan
+	// query terpisah, sehingga tidak ada celah antara pengecekan dan aksi (TOCTOU).
+	pendingBefore := 0
+	for _, sr := range siblings {
+		if sr.Urutan < signatureRequest.Urutan && sr.Status == "menunggu" {
+			pendingBefore++
+		}
 	}
 
 	if pendingBefore > 0 {
+		tx.Rollback()
 		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "Please wait for the previous signer(s) to sign first"})
 		return
 	}
 
-	var reqBody ApproveSignatureRequestBody
-	if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil || reqBody.TandaTanganID == 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "Tanda tangan ID is required"})
-		return
-	}
-
 	var signatureImage models.SignatureImage
-	if err := db.DB.First(&signatureImage, reqBody.TandaTanganID).Error; err != nil {
+	if err := tx.First(&signatureImage, reqBody.TandaTanganID).Error; err != nil {
+		tx.Rollback()
 		writeJSON(w, http.StatusNotFound, map[string]string{"message": "Signature image not found"})
 		return
 	}
 
 	if signatureImage.UserID != userID {
+		tx.Rollback()
 		writeJSON(w, http.StatusForbidden, map[string]string{"message": "You do not have access to this signature image"})
 		return
 	}
 
 	var certificate models.Certificate
-	if err := db.DB.Where("user_id = ? AND status = ?", userID, "active").First(&certificate).Error; err != nil {
+	if err := tx.Where("user_id = ? AND status = ?", userID, "active").First(&certificate).Error; err != nil {
+		tx.Rollback()
 		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "You need an active certificate before signing a document"})
 		return
 	}
 
-	// stamping dilakukan di luar transaction karena ini operasi file, bukan DB
+	// Stamping adalah operasi file (bukan operasi DB). Dilakukan selagi lock DB masih
+	// dipegang supaya tidak ada signer lain pada dokumen yang sama yang bisa lolos
+	// approve/tolak dan mengubah document.FinalFilePath di tengah proses stamping ini.
 	sourceFile := document.FilePath
 	if document.FinalFilePath != "" {
 		sourceFile = document.FinalFilePath
@@ -147,11 +196,10 @@ func ApproveSignatureRequest(w http.ResponseWriter, r *http.Request) {
 		signatureRequest.PageNumber,
 		signatureRequest.KoordinatX, signatureRequest.KoordinatY, signatureRequest.Width, signatureRequest.Height,
 	); err != nil {
+		tx.Rollback()
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "Failed to stamp signature onto document: " + err.Error()})
 		return
 	}
-
-	tx := db.DB.Begin()
 
 	signatureRequest.Status = "selesai"
 	if err := tx.Save(&signatureRequest).Error; err != nil {
@@ -165,25 +213,23 @@ func ApproveSignatureRequest(w http.ResponseWriter, r *http.Request) {
 	// Dokumen baru difinalisasi setelah TIDAK ADA LAGI signer berstatus "menunggu".
 	// Signer lain yang masih menunggu tetap boleh approve/reject di gilirannya masing-masing;
 	// approve pada signer ini tidak langsung mengunci dokumen untuk signer berikutnya.
-	var stillWaiting int64
-	if err := tx.Model(&models.SignatureRequest{}).
-		Where("dokumen_id = ? AND status = ?", signatureRequest.DokumenID, "menunggu").
-		Count(&stillWaiting).Error; err != nil {
-		tx.Rollback()
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "Failed to check remaining signers"})
-		return
+	// Dihitung dari snapshot `siblings` (sudah dikunci FOR UPDATE) + status baru signer ini.
+	stillWaiting := 0
+	rejectedCount := 0
+	for _, sr := range siblings {
+		status := sr.Status
+		if sr.ID == signatureRequest.ID {
+			status = signatureRequest.Status
+		}
+		if status == "menunggu" {
+			stillWaiting++
+		}
+		if status == "ditolak" {
+			rejectedCount++
+		}
 	}
 
 	if stillWaiting == 0 {
-		var rejectedCount int64
-		if err := tx.Model(&models.SignatureRequest{}).
-			Where("dokumen_id = ? AND status = ?", signatureRequest.DokumenID, "ditolak").
-			Count(&rejectedCount).Error; err != nil {
-			tx.Rollback()
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "Failed to check rejected signers"})
-			return
-		}
-
 		if rejectedCount > 0 {
 			document.Status = "selesai_dengan_penolakan"
 		} else {
@@ -276,58 +322,65 @@ func RejectSignatureRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	tx := db.DB.Begin()
+	if tx.Error != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "Failed to start transaction"})
+		return
+	}
+
+	// Kunci baris permintaan_ttd yang akan diproses (row-level lock, FOR UPDATE).
 	var signatureRequest models.SignatureRequest
-	if err := db.DB.First(&signatureRequest, signatureRequestID).Error; err != nil {
+	if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&signatureRequest, signatureRequestID).Error; err != nil {
+		tx.Rollback()
 		writeJSON(w, http.StatusNotFound, map[string]string{"message": "Signature request not found"})
 		return
 	}
 
 	if signatureRequest.UserID != userID {
+		tx.Rollback()
 		writeJSON(w, http.StatusForbidden, map[string]string{"message": "You are not the assigned signer for this request"})
 		return
 	}
 
 	if signatureRequest.Status != "menunggu" {
+		tx.Rollback()
 		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "This signature request has already been processed"})
 		return
 	}
 
-	var document models.Document
-	if err := db.DB.First(&document, signatureRequest.DokumenID).Error; err != nil {
+	// Kunci dokumen beserta SELURUH sibling permintaan_ttd pada dokumen yang sama,
+	// sama seperti pada ApproveSignatureRequest, agar konsisten terhadap approve/tolak
+	// yang diproses hampir bersamaan pada signer lain di dokumen yang sama.
+	document, siblings, err := lockDocumentSigningGroup(tx, signatureRequest.DokumenID)
+	if err != nil {
+		tx.Rollback()
 		writeJSON(w, http.StatusNotFound, map[string]string{"message": "Related document not found"})
 		return
 	}
 
 	if document.Status != "menunggu_ttd" && document.Status != "proses_ttd" {
+		tx.Rollback()
 		writeJSON(w, http.StatusBadRequest, map[string]string{"message": "This document is no longer awaiting signature actions"})
 		return
 	}
 
 	// urutan validation: signer sebelumnya harus sudah diproses (selesai ATAU ditolak) dulu.
-	// Signer dengan status "ditolak" dianggap sudah diproses dan tidak menghalangi giliran berikutnya.
-	var pendingBefore int64
-	if err := db.DB.Model(&models.SignatureRequest{}).
-		Where(
-			"dokumen_id = ? AND urutan < ? AND status = ?",
-			signatureRequest.DokumenID,
-			signatureRequest.Urutan,
-			"menunggu",
-		).
-		Count(&pendingBefore).Error; err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{
-			"message": "Failed to validate signing order",
-		})
-		return
+	// Signer dengan status "ditolak" dianggap sudah diproses dan tidak menghalangi giliran
+	// berikutnya. Dihitung dari snapshot `siblings` yang sudah dikunci (FOR UPDATE).
+	pendingBefore := 0
+	for _, sr := range siblings {
+		if sr.Urutan < signatureRequest.Urutan && sr.Status == "menunggu" {
+			pendingBefore++
+		}
 	}
 
 	if pendingBefore > 0 {
+		tx.Rollback()
 		writeJSON(w, http.StatusBadRequest, map[string]string{
 			"message": "Please wait for the previous signer(s) to sign first",
 		})
 		return
 	}
-
-	tx := db.DB.Begin()
 
 	signatureRequest.Status = "ditolak"
 	signatureRequest.AlasanTolak = requestBody.AlasanTolak
@@ -340,25 +393,23 @@ func RejectSignatureRequest(w http.ResponseWriter, r *http.Request) {
 	// Penolakan SATU signer tidak otomatis membatalkan/mengunci seluruh dokumen.
 	// Signer lain yang masih berstatus "menunggu" tetap dapat approve/reject sesuai gilirannya.
 	// Status akhir dokumen baru ditentukan setelah tidak ada lagi signer berstatus "menunggu".
-	var stillWaiting int64
-	if err := tx.Model(&models.SignatureRequest{}).
-		Where("dokumen_id = ? AND status = ?", signatureRequest.DokumenID, "menunggu").
-		Count(&stillWaiting).Error; err != nil {
-		tx.Rollback()
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "Failed to check remaining signers"})
-		return
+	// Dihitung dari snapshot `siblings` (sudah dikunci FOR UPDATE) + status baru signer ini.
+	stillWaiting := 0
+	approvedCount := 0
+	for _, sr := range siblings {
+		status := sr.Status
+		if sr.ID == signatureRequest.ID {
+			status = signatureRequest.Status
+		}
+		if status == "menunggu" {
+			stillWaiting++
+		}
+		if status == "selesai" {
+			approvedCount++
+		}
 	}
 
 	if stillWaiting == 0 {
-		var approvedCount int64
-		if err := tx.Model(&models.SignatureRequest{}).
-			Where("dokumen_id = ? AND status = ?", signatureRequest.DokumenID, "selesai").
-			Count(&approvedCount).Error; err != nil {
-			tx.Rollback()
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "Failed to check approved signers"})
-			return
-		}
-
 		if approvedCount > 0 {
 			document.Status = "selesai_dengan_penolakan"
 		} else {
